@@ -14,3 +14,7 @@ for name, data in cases:
     t = r.data.decode('utf-8', errors='replace')
     err = any(x in t for x in ['Traceback', 'UndefinedError', 'Internal Server Error', '500 Internal'])
     print(name, r.status_code, 'ERROR' if err else 'OK', 'results' if 'THREAT SEVERITY' in t else 'no-results')
+
+
+
+

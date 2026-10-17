@@ -4,7 +4,9 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+from datetime import datetime
 from functools import wraps
+from spatial_beat_engine import generate_patrol_route
 
 # Initialize the Flask App
 app = Flask(__name__)
@@ -96,6 +98,47 @@ class User(UserMixin, db.Model):
         return f'<User {self.username!r} role={self.role!r}>'
 
 
+# --- Feedback & Debriefing Model ---
+class Feedback(db.Model):
+    __tablename__ = 'feedbacks'
+
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    name           = db.Column(db.String(120), nullable=False)
+    email          = db.Column(db.String(120), nullable=False)
+    role           = db.Column(db.String(40), nullable=True, default='PUBLIC')
+    category       = db.Column(db.String(80), nullable=False, default='General Feedback')
+    subject        = db.Column(db.String(200), nullable=False)
+    police_station = db.Column(db.String(120), nullable=True, default='General / All Stations')
+    priority       = db.Column(db.String(30), nullable=False, default='Routine')
+    rating         = db.Column(db.Integer, nullable=False, default=5)
+    message        = db.Column(db.Text, nullable=False)
+    created_at     = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    status         = db.Column(db.String(40), nullable=False, default='Transmitted')
+
+    user           = db.relationship('User', backref=db.backref('feedbacks', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'email': self.email,
+            'role': self.role,
+            'category': self.category,
+            'subject': self.subject,
+            'police_station': self.police_station or 'General / All Stations',
+            'priority': self.priority,
+            'rating': self.rating,
+            'message': self.message,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'status': self.status
+        }
+
+    def __repr__(self):
+        return f'<Feedback #{self.id} from {self.name!r} [{self.category}]>'
+
+
 @login_manager.user_loader
 def load_user(user_id: str):
     """Flask-Login callback: load user by primary key."""
@@ -147,6 +190,44 @@ def init_db():
 
         db.session.commit()
         print('[init_db] Verified default user accounts.')
+
+        # Seed initial debriefing/feedback records if empty
+        try:
+            if not Feedback.query.first():
+                sample_feedbacks = [
+                    Feedback(
+                        name="Inspector R. Kumar",
+                        email="officer_kumar@ksp.gov.in",
+                        role="FIELD_OFFICER",
+                        category="Beat Patrol Route & Waypoint Assessment",
+                        subject="Night Patrol Frequency in Koramangala 5th Block",
+                        police_station="Koramangala Police Station",
+                        priority="Urgent",
+                        rating=5,
+                        message="K-Means waypoint clustering for night shifts accurately identifies high-footfall bar cluster zones. Recommend adding static surveillance near 80ft Road cross-junction.",
+                        created_at=datetime.utcnow(),
+                        status="Reviewed"
+                    ),
+                    Feedback(
+                        name="Citizen Safety Forum",
+                        email="citizen_forum@bengaluru.org",
+                        role="PUBLIC",
+                        category="Crime Tip / Field Observation",
+                        subject="Inoperative Streetlights near Indiranagar Metro Backlane",
+                        police_station="Indiranagar Police Station",
+                        priority="Routine",
+                        rating=4,
+                        message="Several streetlights are non-functional on 100ft road service lane. Increased foot patrol between 10 PM and 1 AM would significantly deter bike-borne mobile snatching.",
+                        created_at=datetime.utcnow(),
+                        status="Investigating"
+                    )
+                ]
+                db.session.add_all(sample_feedbacks)
+                db.session.commit()
+                print('[init_db] Verified default feedback records.')
+        except Exception as fb_err:
+            db.session.rollback()
+            print(f'[init_db] Note on feedback seeding: {fb_err}')
 
 
 # Seed on startup before routes are registered
@@ -244,34 +325,71 @@ def search_mo():
         }), 500
 
 
-# --- Spatio-Temporal Beat Engine Route (Week 3) ---
+# --- Spatio-Temporal Beat Engine Route ---
 @app.route('/api/patrol-route', methods=['POST'])
 def api_patrol_route():
     """
     Generate an optimized, K-Means clustered high-risk patrol route for a police beat.
-    Payload: { "beat_id": "BEAT_101", "shift": "night", "num_waypoints": 5 }
+    Payload: { "beat_id": "BEAT_101", "shift_window": "Night", "num_waypoints": 5 }
     """
-    data = request.get_json(silent=True) or request.form or {}
-    beat_id = str(data.get('beat_id') or 'BEAT_101').strip()
-    shift = str(data.get('shift') or 'night').strip()
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
+        data = request.form.to_dict() if request.form else {}
+
+    # Clean validation for required beat_id
+    raw_beat_id = data.get('beat_id')
+    if not raw_beat_id or not str(raw_beat_id).strip():
+        return jsonify({
+            'status': 'error',
+            'error': 'Missing required parameter: beat_id',
+            'message': 'A valid beat_id must be provided in the request body.'
+        }), 400
+
+    beat_id = str(raw_beat_id).strip()
+    shift_window = str(data.get('shift_window') or data.get('shift') or 'Night').strip()
+
     try:
         num_waypoints = int(data.get('num_waypoints') or 5)
+        if num_waypoints < 1:
+            num_waypoints = 5
     except (ValueError, TypeError):
         num_waypoints = 5
 
     try:
-        from spatial_beat_engine import generate_patrol_route
-        waypoints = generate_patrol_route(beat_id=beat_id, shift=shift, num_waypoints=num_waypoints)
+        waypoints = generate_patrol_route(
+            beat_id=beat_id,
+            shift_window=shift_window,
+            num_waypoints=num_waypoints
+        )
+
+        if not waypoints:
+            return jsonify({
+                'status': 'error',
+                'error': 'Insufficient coordinate data',
+                'message': f"No coordinate data available to generate patrol route for beat '{beat_id}'."
+            }), 400
+
         return jsonify({
             'status': 'success',
             'beat_id': beat_id,
-            'shift': shift,
-            'algorithm_used': 'K-Means Spatial Downscaling & Nearest-Neighbor Route Sequencing',
+            'shift_window': shift_window,
+            'shift': shift_window.lower(),
+            'algorithm_used': 'K-Means Spatial Centroids & Nearest-Neighbor TSP Sequencing',
             'total_waypoints': len(waypoints),
             'waypoints': waypoints
         }), 200
+    except ValueError as ve:
+        return jsonify({
+            'status': 'error',
+            'error': 'Invalid Request or Insufficient Coordinate Data',
+            'message': str(ve)
+        }), 400
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({
+            'status': 'error',
+            'error': 'Processing Error',
+            'message': str(e)
+        }), 500
 
 
 # --- Generative Case Briefing Engine Route (Week 4) ---
@@ -353,6 +471,80 @@ def api_role_dashboard():
             'status': 'error',
             'message': f"Access forbidden for role '{requested_role}'. Must be 'FIELD_OFFICER' or 'SP_ADMIN'."
         }), 403
+
+
+# --- Feedback & Debriefing REST API Route ---
+@app.route('/api/feedback', methods=['GET', 'POST'])
+def api_feedback():
+    """
+    API endpoint to submit or retrieve intelligence feedback records.
+    GET: Returns list of recent debrief records.
+    POST: Creates a new feedback entry.
+    """
+    if request.method == 'POST':
+        req_data = request.get_json(silent=True)
+        if not req_data or not isinstance(req_data, dict):
+            req_data = request.form.to_dict() if request.form else {}
+
+        message = (req_data.get('message') or req_data.get('feedback') or req_data.get('comments') or '').strip()
+        if not message:
+            return jsonify({
+                'status': 'error',
+                'message': 'Feedback message / observation is required.'
+            }), 400
+
+        name = (req_data.get('name') or (current_user.username if current_user.is_authenticated else 'Anonymous')).strip()
+        email = (req_data.get('email') or f"{name.lower().replace(' ', '_')}@ksp.gov.in").strip()
+        category = (req_data.get('category') or 'General Feedback').strip()
+        subject = (req_data.get('subject') or 'Field Observation Debrief').strip()
+        police_station = (req_data.get('police_station') or req_data.get('station') or 'General / All Stations').strip()
+        priority = (req_data.get('priority') or 'Routine').strip()
+        try:
+            rating = int(req_data.get('rating') or 5)
+            if rating < 1 or rating > 5:
+                rating = 5
+        except (ValueError, TypeError):
+            rating = 5
+
+        fb = Feedback(
+            user_id=current_user.id if current_user.is_authenticated else None,
+            name=name,
+            email=email,
+            role=str(getattr(current_user, 'role', 'PUBLIC')) if current_user.is_authenticated else 'PUBLIC',
+            category=category,
+            subject=subject,
+            police_station=police_station,
+            priority=priority,
+            rating=rating,
+            message=message,
+            created_at=datetime.utcnow(),
+            status='Transmitted'
+        )
+
+        try:
+            db.session.add(fb)
+            db.session.commit()
+            return jsonify({
+                'status': 'success',
+                'message': f'Feedback registered successfully. Transmission ID: #FB-{fb.id:04d}',
+                'feedback_id': fb.id,
+                'data': fb.to_dict()
+            }), 201
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    # GET
+    try:
+        limit = int(request.args.get('limit') or 20)
+    except (ValueError, TypeError):
+        limit = 20
+    feedbacks = Feedback.query.order_by(Feedback.created_at.desc()).limit(limit).all()
+    return jsonify({
+        'status': 'success',
+        'count': len(feedbacks),
+        'feedbacks': [f.to_dict() for f in feedbacks]
+    }), 200
 
 
 from routes import *

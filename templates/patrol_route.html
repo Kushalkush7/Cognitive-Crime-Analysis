@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proactive Patrol Dispatch HUD // K-Means Clustering & TSP Route Optimization</title>
+    <meta name="description" content="Proactive Patrol Waypoint Generation & Dispatch HUD — K-Means spatial hotspot downscaling, Red/Orange/Green risk assessment, and Nearest-Neighbor TSP sequential route planning.">
+
+    <!-- Leaflet.js -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='stylesheets/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='stylesheets/graphanalysis.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='stylesheets/K-means.css') }}">
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome -->
+    <script src="https://kit.fontawesome.com/7bdcd846e8.js" crossorigin="anonymous"></script>
+
+    <!-- Theme initialization -->
+    <script>
+        (function() {
+            const saved = localStorage.getItem('app-theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', saved);
+            document.documentElement.setAttribute('data-bs-theme', saved);
+        })();
+    </script>
+
+    <style>
+        :root {
+            --bs-body-bg: #0b0f19 !important;
+            --bs-body-color: #f8fafc !important;
+            --accent-red: #ef4444;
+            --accent-orange: #f59e0b;
+            --accent-green: #10b981;
+            --accent-cyan: #06b6d4;
+            --bg-card: rgba(15, 23, 42, 0.78);
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --border-glass-hover: rgba(56, 189, 248, 0.35);
+            --font-mono: 'Share Tech Mono', monospace;
+            --font-display: 'Plus Jakarta Sans', sans-serif;
+            --font-body: 'Outfit', sans-serif;
+        }
+        html, body {
+            background-color: #0b0f19 !important;
+            background: #0b0f19 !important;
+            color: #f8fafc !important;
+            font-family: var(--font-body);
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #0b0f19 !important;
+            background-image: 
+                radial-gradient(at 10% 15%, rgba(6, 182, 212, 0.08) 0px, transparent 55%),
+                radial-gradient(at 90% 10%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
+                radial-gradient(at 50% 55%, rgba(139, 92, 246, 0.06) 0px, transparent 55%),
+                radial-gradient(at 15% 85%, rgba(16, 185, 129, 0.06) 0px, transparent 45%) !important;
+            background-attachment: fixed;
+            background-size: cover;
+        }
+
+        .hud-glass-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-glass);
+            border-radius: 14px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+            transition: all 0.25s ease;
+        }
+        .hud-glass-card:hover {
+            border-color: var(--border-glass-hover);
+        }
+
+        .hud-badge {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            padding: 0.3rem 0.65rem;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .hud-badge-red {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+        }
+        .hud-badge-orange {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            color: #fcd34d;
+        }
+        .hud-badge-green {
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.4);
+            color: #6ee7b7;
+        }
+        .hud-badge-cyan {
+            background: rgba(6, 182, 212, 0.15);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            color: #67e8f9;
+        }
+
+        .section-header {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent-cyan);
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-glass);
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border-glass);
+            border-radius: 10px;
+            padding: 0.9rem 1rem;
+            text-align: center;
+        }
+        .stat-card .stat-value {
+            font-family: var(--font-mono);
+            font-size: 1.45rem;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #38bdf8;
+        }
+        .stat-card .stat-label {
+            font-size: 0.72rem;
+            color: #94a3b8;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-top: 0.25rem;
+        }
+
+        #patrol-map {
+            height: 520px;
+            border-radius: 12px;
+            border: 1px solid var(--border-glass);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            z-index: 1;
+        }
+
+        /* Free OpenStreetMap Dark Tactical Filter (Zero API Key Needed) */
+        #patrol-map.dark-tactical-tiles .leaflet-tile-pane {
+            filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(92%);
+        }
+        .leaflet-control-zoom a {
+            background-color: #1e293b !important;
+            color: #f8fafc !important;
+            border-color: rgba(255, 255, 255, 0.15) !important;
+        }
+        .leaflet-control-zoom a:hover {
+            background-color: #334155 !important;
+            color: #38bdf8 !important;
+        }
+        .leaflet-container .leaflet-control-attribution {
+            background: rgba(11, 15, 25, 0.75) !important;
+            color: #94a3b8 !important;
+            font-size: 10px;
+        }
+        .leaflet-container .leaflet-control-attribution a {
+            color: #38bdf8 !important;
+        }
+
+        .waypoint-card {
+            background: rgba(30, 41, 59, 0.55);
+            border: 1px solid var(--border-glass);
+            border-left: 4px solid var(--accent-cyan);
+            border-radius: 10px;
+            padding: 1rem 1.15rem;
+            margin-bottom: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .waypoint-card:hover {
+            transform: translateX(4px);
+            background: rgba(30, 41, 59, 0.85);
+            border-color: rgba(56, 189, 248, 0.45);
+        }
+        .waypoint-card.risk-red {
+            border-left-color: var(--accent-red);
+        }
+        .waypoint-card.risk-orange {
+            border-left-color: var(--accent-orange);
+        }
+        .waypoint-card.risk-green {
+            border-left-color: var(--accent-green);
+        }
+
+        .waypoint-order-badge {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: 0.85rem;
+            margin-right: 0.6rem;
+            flex-shrink: 0;
+        }
+        .badge-red {
+            background: rgba(239, 68, 68, 0.25);
+            color: #f87171;
+            border: 1px solid #ef4444;
+        }
+        .badge-orange {
+            background: rgba(245, 158, 11, 0.25);
+            color: #fbbf24;
+            border: 1px solid #f59e0b;
+        }
+        .badge-green {
+            background: rgba(16, 185, 129, 0.25);
+            color: #34d399;
+            border: 1px solid #10b981;
+        }
+
+        .custom-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-family: var(--font-mono);
+            font-weight: 800;
+            font-size: 13px;
+            box-shadow: 0 0 14px rgba(0,0,0,0.6);
+            border: 2px solid #ffffff;
+            color: #ffffff;
+        }
+        .marker-red {
+            background: #ef4444;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.7);
+        }
+        .marker-orange {
+            background: #f59e0b;
+            box-shadow: 0 0 16px rgba(245, 158, 11, 0.7);
+        }
+        .marker-green {
+            background: #10b981;
+            box-shadow: 0 0 16px rgba(16, 185, 129, 0.7);
+        }
+        .marker-base {
+            background: #0284c7;
+            border: 2px dashed #38bdf8;
+            box-shadow: 0 0 18px rgba(56, 189, 248, 0.8);
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            display: inline-block;
+            box-shadow: 0 0 8px #ef4444;
+            animation: pulse-glow 1.5s infinite;
+        }
+        @keyframes pulse-glow {
+            0% { transform: scale(0.9); opacity: 0.7; }
+            50% { transform: scale(1.3); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.7; }
+        }
+
+        .control-input {
+            background: rgba(15, 23, 42, 0.8) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            color: #f8fafc !important;
+            border-radius: 8px;
+            font-size: 0.88rem;
+        }
+        .control-input:focus {
+            border-color: #38bdf8 !important;
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25) !important;
+        }
+
+        .btn-generate {
+            background: linear-gradient(135deg, #0284c7 0%, #06b6d4 100%);
+            border: none;
+            color: white;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            font-size: 0.88rem;
+            padding: 0.75rem 1.4rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35);
+            transition: all 0.2s ease;
+            width: 100%;
+        }
+        .btn-generate:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(6, 182, 212, 0.5);
+            color: #ffffff;
+        }
+
+        .scrollable-waypoints {
+            max-height: 520px;
+            overflow-y: auto;
+            padding-right: 0.4rem;
+        }
+        .scrollable-waypoints::-webkit-scrollbar {
+            width: 5px;
+        }
+        .scrollable-waypoints::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Main Navigation Bar -->
+    <nav class="main">
+        <label class="logo" onclick="window.location.href='{{url_for('index')}}'">CRIME INTELLIGENCE UNIT</label>
+        <ul>
+            <li><a href="{{url_for('index')}}"><i class="fas fa-radar"></i> Home</a></li>
+            <li><a href="{{url_for('about')}}"><i class="fas fa-shield-alt"></i> Dossier</a></li>
+            {% if current_user.is_authenticated and current_user.role == 'field_officer' %}
+            <li><a href="{{url_for('crimefeed')}}"><i class="fas fa-satellite-dish"></i> Spatial Heatmap HUD</a></li>
+            <li><a href="{{url_for('analyze_case')}}"><i class="fas fa-microchip"></i> FIR Threat Assessment HUD</a></li>
+            <li><a href="{{url_for('cdr_page')}}"><i class="fas fa-phone-volume"></i> CDR Intelligence</a></li>
+            <li><a href="{{url_for('patrol_hud')}}" class="active" style="color:var(--accent-primary);font-weight:700;"><i class="fas fa-route"></i> Patrol Dispatch HUD</a></li>
+            <li><a href="{{url_for('datadisp')}}"><i class="fas fa-database"></i> Datasets</a></li>
+            {% endif %}
+            <li><a href="{{url_for('feedback')}}"><i class="fas fa-comment-dots"></i> Feedback</a></li>
+        </ul>
+
+        <!-- Theme Switcher & Auth Controls -->
+        <div class="nav-auth" style="display:flex;align-items:center;gap:0.6rem;margin-left:auto;flex-shrink:0;">
+            <button id="theme-toggle-btn" class="theme-toggle-btn" type="button" aria-label="Toggle Theme">
+                <i class="fas fa-moon theme-icon"></i>
+                <span class="theme-text">Dark Mode</span>
+            </button>
+
+            {% if current_user.is_authenticated %}
+                <span class="nav-role-badge" style="
+                    display:inline-flex;align-items:center;gap:0.35rem;
+                    padding:0.25rem 0.65rem;border-radius:999px;font-size:0.7rem;
+                    font-weight:700;letter-spacing:0.07em;text-transform:uppercase;
+                    background:rgba(56,189,248,0.18);border:1px solid rgba(56,189,248,0.45);
+                    color:#38bdf8;white-space:nowrap;">
+                    <span style="width:7px;height:7px;border-radius:50%;background:#38bdf8;
+                                 box-shadow:0 0 6px #38bdf8;flex-shrink:0;"></span>
+                    {{ current_user.role | upper }}
+                </span>
+
+                <a href="{{ url_for('logout') }}" class="nav-logout-btn" style="
+                    display:inline-flex;align-items:center;gap:0.35rem;
+                    padding:0.3rem 0.8rem;border-radius:8px;font-size:0.78rem;
+                    font-weight:600;letter-spacing:0.03em;text-decoration:none;
+                    background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.4);
+                    color:#f43f5e;white-space:nowrap;">
+                    <i class="fas fa-sign-out-alt" style="font-size:0.75rem;"></i> Logout
+                </a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <!-- Header Section -->
+    <div class="container-fluid px-lg-5 pt-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+            <div>
+                <div class="d-flex align-items-center gap-2 mb-1">
+                    <span class="pulse-dot"></span>
+                    <span style="font-family:var(--font-mono);font-size:0.75rem;letter-spacing:2px;color:#38bdf8;">
+                        RESTRICTED // FIELD OPERATIONS DISPATCH
+                    </span>
+                </div>
+                <h2 style="font-family:var(--font-display);font-weight:800;letter-spacing:-0.5px;margin:0;">
+                    PROACTIVE PATROL WAYPOINT GENERATION & ROUTE SEQUENCING
+                </h2>
+                <p style="color:#94a3b8;font-size:0.88rem;margin:0.25rem 0 0 0;">
+                    K-Means spatial centroid clustering, Red/Orange/Green threat tiering, and Nearest-Neighbor Traveling Salesperson (TSP) route optimization.
+                </p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="hud-badge hud-badge-cyan">
+                    <i class="fas fa-microchip"></i> Scikit-Learn KMeans
+                </span>
+                <span class="hud-badge hud-badge-orange">
+                    <i class="fas fa-project-diagram"></i> TSP Nearest-Neighbor
+                </span>
+            </div>
+        </div>
+
+        <!-- Main Workspace Grid -->
+        <div class="row g-4">
+            <!-- Left Column: Controls & Tactical Parameters -->
+            <div class="col-lg-4 col-xl-3">
+                <div class="hud-glass-card">
+                    <div class="section-header">
+                        <span><i class="fas fa-sliders mr-2"></i> Dispatch Parameters</span>
+                        <i class="fas fa-shield-halved text-muted"></i>
+                    </div>
+
+                    <form id="patrol-form" onsubmit="event.preventDefault(); fetchPatrolRoute();">
+                        <!-- Beat Selector -->
+                        <div class="mb-3">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;color:#94a3b8;">
+                                POLICE BEAT JURISDICTION
+                            </label>
+                            <select id="beat-selector" class="form-select control-input">
+    <optgroup label="── CENTRAL DIVISION ──">
+        <option value="BEAT_CEN_01" selected>BEAT_CEN_01 — Cubbon Park PS: Cubbon Park & Vidhana Soudha Perimeter</option>
+        <option value="BEAT_CEN_02">BEAT_CEN_02 — Ashok Nagar PS: Ashok Nagar & Brigade Commercial District</option>
+        <option value="BEAT_CEN_03">BEAT_CEN_03 — High Grounds PS: High Grounds & Palace Corridor</option>
+        <option value="BEAT_CEN_04">BEAT_CEN_04 — Ulsoor Gate PS: Ulsoor Gate & City Market Transit Corridor</option>
+        <option value="BEAT_CEN_05">BEAT_CEN_05 — Wilson Garden PS: Wilson Garden & Shanthinagar Hub</option>
+        <option value="BEAT_CEN_06">BEAT_CEN_06 — Vidhana Soudha PS: Vidhana Soudha Secretariat Security Zone</option>
+    </optgroup>
+    <optgroup label="── EAST DIVISION ──">
+        <option value="BEAT_EAS_01">BEAT_EAS_01 — Indiranagar PS: Indiranagar Commercial Corridor</option>
+        <option value="BEAT_EAS_02">BEAT_EAS_02 — Halasuru PS: Halasuru & Cambridge Layout Sector</option>
+        <option value="BEAT_EAS_03">BEAT_EAS_03 — Shivajinagar PS: Shivajinagar Commercial & Transit Hub</option>
+        <option value="BEAT_EAS_04">BEAT_EAS_04 — Commercial Street PS: Commercial Street Retail Ward</option>
+        <option value="BEAT_EAS_05">BEAT_EAS_05 — Banaswadi PS: Banaswadi & HRBR Urban Sector</option>
+        <option value="BEAT_EAS_06">BEAT_EAS_06 — Bharathinagar PS: Bharathinagar & Coles Park Ward</option>
+        <option value="BEAT_EAS_07">BEAT_EAS_07 — Pulakeshinagar PS: Pulakeshinagar & Frazer Town Cantonment</option>
+        <option value="BEAT_EAS_08">BEAT_EAS_08 — KG Halli PS: KG Halli & Nagawara Perimeter</option>
+        <option value="BEAT_EAS_09">BEAT_EAS_09 — DJ Halli PS: DJ Halli & Tannery Commercial Zone</option>
+        <option value="BEAT_EAS_10">BEAT_EAS_10 — Ramamurthy Nagar PS: Ramamurthy Nagar & TC Palya Sector</option>
+    </optgroup>
+    <optgroup label="── SOUTH DIVISION ──">
+        <option value="BEAT_SOU_01">BEAT_SOU_01 — Jayanagar PS: Jayanagar 4th Block Cultural & Market Ward</option>
+        <option value="BEAT_SOU_02">BEAT_SOU_02 — Basavanagudi PS: Basavanagudi & Gandhi Bazaar Heritage Ward</option>
+        <option value="BEAT_SOU_03">BEAT_SOU_03 — JP Nagar PS: JP Nagar Sarakki & 24th Main Corridor</option>
+        <option value="BEAT_SOU_04">BEAT_SOU_04 — Banashankari PS: Banashankari 2nd Stage & BDA Radial</option>
+        <option value="BEAT_SOU_05">BEAT_SOU_05 — Girinagar PS: Girinagar & Avalahalli Urban Ward</option>
+        <option value="BEAT_SOU_06">BEAT_SOU_06 — Hanumanthanagar PS: Hanumanthanagar & Mount Joy Ward</option>
+        <option value="BEAT_SOU_07">BEAT_SOU_07 — Subramanyapura PS: Subramanyapura & Uttarahalli Corridor</option>
+        <option value="BEAT_SOU_08">BEAT_SOU_08 — Kumaraswamy Layout PS: Kumaraswamy Layout & ISRO Hub</option>
+        <option value="BEAT_SOU_09">BEAT_SOU_09 — Tilak Nagar PS: Tilak Nagar & 9th Block Urban Sector</option>
+        <option value="BEAT_SOU_10">BEAT_SOU_10 — Siddapura PS: Siddapura & Lalbagh Southern Ward</option>
+    </optgroup>
+    <optgroup label="── SOUTH EAST DIVISION ──">
+        <option value="BEAT_SED_01">BEAT_SED_01 — Koramangala PS: Koramangala 5th Block Nightlife Zone</option>
+        <option value="BEAT_SED_02">BEAT_SED_02 — Madiwala PS: Madiwala Market & St Johns Intercept</option>
+        <option value="BEAT_SED_03">BEAT_SED_03 — HSR Layout PS: HSR Layout 27th Main High-Street</option>
+        <option value="BEAT_SED_04">BEAT_SED_04 — Electronic City PS: Electronic City Phase 1 Tech Corridor</option>
+        <option value="BEAT_SED_05">BEAT_SED_05 — Bommanahalli PS: Bommanahalli & Garvebhavipalya Ward</option>
+        <option value="BEAT_SED_06">BEAT_SED_06 — Begur PS: Begur & Akshayanagar Urban Ward</option>
+        <option value="BEAT_SED_07">BEAT_SED_07 — Hulimavu PS: Hulimavu & Meenakshi Mall Sector</option>
+        <option value="BEAT_SED_08">BEAT_SED_08 — Parappana Agrahara PS: Parappana Agrahara & Kudlu Gate Sector</option>
+        <option value="BEAT_SED_09">BEAT_SED_09 — Mico Layout PS: Mico Layout & BTM 2nd Stage Ward</option>
+    </optgroup>
+    <optgroup label="── WEST DIVISION ──">
+        <option value="BEAT_WES_01">BEAT_WES_01 — Malleshwaram PS: Malleshwaram & Margosa Commercial Ward</option>
+        <option value="BEAT_WES_02">BEAT_WES_02 — Rajajinagar PS: Rajajinagar 1st Block & Navrang Hub</option>
+        <option value="BEAT_WES_03">BEAT_WES_03 — Vijayanagar PS: Vijayanagar & Chord Road Corridor</option>
+        <option value="BEAT_WES_04">BEAT_WES_04 — Basaveshwaranagar PS: Basaveshwaranagar & Shankar Mutt Ward</option>
+        <option value="BEAT_WES_05">BEAT_WES_05 — Kamakshipalya PS: Kamakshipalya & Magadi Arterial Ward</option>
+        <option value="BEAT_WES_06">BEAT_WES_06 — Chandra Layout PS: Chandra Layout & Nagarbhavi 1st Stage</option>
+        <option value="BEAT_WES_07">BEAT_WES_07 — Kengeri PS: Kengeri & Mysore Road Satellite Ward</option>
+        <option value="BEAT_WES_08">BEAT_WES_08 — Byatarayanapura PS: Byatarayanapura West & Mysore Road Corridor</option>
+        <option value="BEAT_WES_09">BEAT_WES_09 — Magadi Road PS: Magadi Road & Leprosy Hospital Ward</option>
+        <option value="BEAT_WES_10">BEAT_WES_10 — Subramanyanagar PS: Subramanyanagar & Orion Gateway Sector</option>
+    </optgroup>
+    <optgroup label="── NORTH DIVISION ──">
+        <option value="BEAT_NOR_01">BEAT_NOR_01 — Yeshwanthpur PS: Yeshwanthpur Transit & APMC Market Hub</option>
+        <option value="BEAT_NOR_02">BEAT_NOR_02 — R.T. Nagar PS: R.T. Nagar & Dinnur Commercial Corridor</option>
+        <option value="BEAT_NOR_03">BEAT_NOR_03 — Hebbal PS: Hebbal & Bellary Road Express Flyover Hub</option>
+        <option value="BEAT_NOR_04">BEAT_NOR_04 — Sanjaynagar PS: Sanjaynagar & New BEL High-Street</option>
+        <option value="BEAT_NOR_05">BEAT_NOR_05 — J.C. Nagar PS: J.C. Nagar & Jayamahal Urban Sector</option>
+        <option value="BEAT_NOR_06">BEAT_NOR_06 — Peenya PS: Peenya Industrial Mega-Zone</option>
+        <option value="BEAT_NOR_07">BEAT_NOR_07 — Nandini Layout PS: Nandini Layout & Kanteerava Studio Sector</option>
+        <option value="BEAT_NOR_08">BEAT_NOR_08 — Mahalakshmi Layout PS: Mahalakshmi Layout & ISKCON Temple Radial</option>
+        <option value="BEAT_NOR_09">BEAT_NOR_09 — Gangammanagudi PS: Gangammanagudi & Jalahalli East Ward</option>
+        <option value="BEAT_NOR_10">BEAT_NOR_10 — Jalahalli PS: Jalahalli & BEL Manufacturing Campus</option>
+    </optgroup>
+    <optgroup label="── NORTH EAST DIVISION ──">
+        <option value="BEAT_NED_01">BEAT_NED_01 — Yelahanka PS: Yelahanka Old Town & Kogilu Hub</option>
+        <option value="BEAT_NED_02">BEAT_NED_02 — Yelahanka New Town PS: Yelahanka New Town & Rail Wheel Sector</option>
+        <option value="BEAT_NED_03">BEAT_NED_03 — Kodigehalli PS: Kodigehalli & Sahakarnagar Corridor</option>
+        <option value="BEAT_NED_04">BEAT_NED_04 — Vidyaranyapura PS: Vidyaranyapura & HMT Layout Sector</option>
+        <option value="BEAT_NED_05">BEAT_NED_05 — Bagalur PS: Bagalur & Aerospace Tech Park Ward</option>
+        <option value="BEAT_NED_06">BEAT_NED_06 — Chikkajala PS: Chikkajala & Airport Highway Toll Corridor</option>
+        <option value="BEAT_NED_07">BEAT_NED_07 — Devanahalli PS: Devanahalli & BIAL Tech Sector</option>
+        <option value="BEAT_NED_08">BEAT_NED_08 — BIAL Airport PS: Kempegowda International Airport (BIAL)</option>
+        <option value="BEAT_NED_09">BEAT_NED_09 — Amruthahalli PS: Amruthahalli & Jakkur Aerodrome Sector</option>
+    </optgroup>
+    <optgroup label="── WHITEFIELD DIVISION ──">
+        <option value="BEAT_WHI_01">BEAT_WHI_01 — Whitefield PS: Whitefield Tech Corridor & ITPL Hub</option>
+        <option value="BEAT_WHI_02">BEAT_WHI_02 — HAL PS: HAL & Old Airport Arterial Ward</option>
+        <option value="BEAT_WHI_03">BEAT_WHI_03 — Marathahalli PS: Marathahalli & Multiplex Commercial Hub</option>
+        <option value="BEAT_WHI_04">BEAT_WHI_04 — Mahadevapura PS: Mahadevapura & Bagmane Tech Corridor</option>
+        <option value="BEAT_WHI_05">BEAT_WHI_05 — K.R. Puram PS: K.R. Puram & Hanging Bridge Transit Sector</option>
+        <option value="BEAT_WHI_06">BEAT_WHI_06 — Kadugodi PS: Kadugodi & Belathur Residential Ward</option>
+        <option value="BEAT_WHI_07">BEAT_WHI_07 — Varthur PS: Varthur & Gunjur Lake Agro-Urban Ward</option>
+        <option value="BEAT_WHI_08">BEAT_WHI_08 — Bellandur PS: Bellandur & EcoSpace Tech Ecosystem</option>
+        <option value="BEAT_WHI_09">BEAT_WHI_09 — Avalahalli PS: Avalahalli (East) & Bidarahalli Ward</option>
+    </optgroup>
+</select>
+                        </div>
+
+                        <!-- Shift Window Selector -->
+                        <div class="mb-3">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;color:#94a3b8;">
+                                PATROL SHIFT WINDOW
+                            </label>
+                            <select id="shift-selector" class="form-select control-input">
+                                <option value="Night" selected>Night Shift (22:00 – 06:00 HRS)</option>
+                                <option value="Evening">Evening Shift (14:00 – 22:00 HRS)</option>
+                                <option value="Morning">Morning Shift (06:00 – 14:00 HRS)</option>
+                            </select>
+                        </div>
+
+                        <!-- Waypoints Count -->
+                        <div class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label mb-0" style="font-size:0.8rem;font-weight:600;color:#94a3b8;">
+                                    HIGH-RISK CENTROIDS (K)
+                                </label>
+                                <span id="k-val" style="font-family:var(--font-mono);font-size:0.85rem;color:#38bdf8;font-weight:700;">
+                                    5 Waypoints
+                                </span>
+                            </div>
+                            <input type="range" id="k-slider" class="form-range" min="3" max="8" value="5" step="1" 
+                                   oninput="document.getElementById('k-val').innerText = this.value + ' Waypoints';">
+                        </div>
+
+                        <!-- Generate Button -->
+                        <button type="submit" id="btn-submit" class="btn btn-generate">
+                            <i class="fas fa-compass-drafting mr-2"></i> Compute Tactical Patrol Path
+                        </button>
+                    </form>
+
+                    <!-- Tactical Beat Metadata Card -->
+                    <div id="beat-metadata" class="mt-4 pt-3 border-top border-secondary border-opacity-25" style="font-size:0.82rem;">
+                        <div class="text-uppercase text-muted mb-2" style="font-family:var(--font-mono);font-size:0.7rem;">
+                            ACTIVE BASE OUTPOST
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <i class="fas fa-building-shield text-info"></i>
+                            <span id="meta-station" class="fw-bold">Indiranagar Police Station</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 text-secondary mb-1">
+                            <i class="fas fa-location-dot"></i>
+                            <span id="meta-checkpoint">CMH Road Main Post [12.9790, 77.6415]</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Export & Actions -->
+                <div class="hud-glass-card py-3">
+                    <button class="btn btn-sm btn-outline-info w-100 mb-2" onclick="window.print();">
+                        <i class="fas fa-print mr-1"></i> Print Tactical Manifest
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary w-100" onclick="copyManifestJSON();">
+                        <i class="fas fa-copy mr-1"></i> Copy Route JSON
+                    </button>
+                </div>
+            </div>
+
+            <!-- Center & Right: Map & Waypoints Manifest -->
+            <div class="col-lg-8 col-xl-9">
+                <!-- Summary Telemetry Row -->
+                <div class="stat-grid">
+                    <div class="stat-card">
+                        <div id="stat-total-wp" class="stat-value">5</div>
+                        <div class="stat-label">Waypoints</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="stat-red-count" class="stat-value text-danger">0</div>
+                        <div class="stat-label">Critical (Red)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="stat-orange-count" class="stat-value text-warning">0</div>
+                        <div class="stat-label">Elevated (Orange)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="stat-green-count" class="stat-value text-success">0</div>
+                        <div class="stat-label">Stable (Green)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="stat-circuit-dist" class="stat-value text-info">-- km</div>
+                        <div class="stat-label">Circuit Path</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="stat-circuit-time" class="stat-value text-primary">-- mins</div>
+                        <div class="stat-label">Est. Duration</div>
+                    </div>
+                </div>
+
+                <div class="row g-4">
+                    <!-- Leaflet Route Map -->
+                    <div class="col-xl-7">
+                        <div class="hud-glass-card p-2">
+                            <div class="p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                                <span style="font-family:var(--font-mono);font-size:0.75rem;letter-spacing:1px;color:#38bdf8;">
+                                    <i class="fas fa-satellite-dish mr-1"></i> SPATIAL TRAJECTORY MAP // WGS84
+                                </span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button type="button" class="btn btn-sm btn-outline-info active" id="btn-tile-dark" onclick="switchTileLayer('dark')">
+                                            <i class="fas fa-moon"></i> Tactical
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-info" id="btn-tile-osm" onclick="switchTileLayer('osm')">
+                                            <i class="fas fa-map"></i> Streets
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-info" id="btn-tile-satellite" onclick="switchTileLayer('satellite')">
+                                            <i class="fas fa-satellite"></i> Satellite
+                                        </button>
+                                    </div>
+                                    <span id="map-status" class="badge bg-secondary" style="font-size:0.68rem;">Ready</span>
+                                </div>
+                            </div>
+                            <div id="patrol-map" class="dark-tactical-tiles"></div>
+                        </div>
+                    </div>
+
+                    <!-- Ordered Waypoints List & Tactical Protocol -->
+                    <div class="col-xl-5">
+                        <div class="hud-glass-card">
+                            <div class="section-header">
+                                <span><i class="fas fa-list-ol mr-2"></i> Sequential Checkpoints</span>
+                                <span id="route-shift-label" class="badge bg-dark border border-secondary text-info">NIGHT SHIFT</span>
+                            </div>
+
+                            <div id="waypoints-container" class="scrollable-waypoints">
+                                <div class="text-center py-5 text-muted">
+                                    <i class="fas fa-circle-notch fa-spin fa-2x mb-3 text-info"></i>
+                                    <div>Computing K-Means centroids and sequential path...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet & Route Script -->
+    <script>
+        let map = null;
+        let markersGroup = null;
+        let routePolyline = null;
+        let currentWaypoints = [];
+        let currentTileLayer = null;
+
+        const TILE_PROVIDERS = {
+            dark: {
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                options: {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                },
+                isDarkFiltered: true
+            },
+            osm: {
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                options: {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                },
+                isDarkFiltered: false
+            },
+            satellite: {
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                options: {
+                    attribution: 'Tiles &copy; Esri &mdash; Earthstar Geographics',
+                    maxZoom: 19
+                },
+                isDarkFiltered: false
+            }
+        };
+
+        function switchTileLayer(mode) {
+            const mapEl = document.getElementById('patrol-map');
+            ['dark', 'osm', 'satellite'].forEach(m => {
+                const btn = document.getElementById(`btn-tile-${m}`);
+                if (btn) btn.classList.toggle('active', m === mode);
+            });
+
+            if (mode === 'dark') {
+                mapEl.classList.add('dark-tactical-tiles');
+            } else {
+                mapEl.classList.remove('dark-tactical-tiles');
+            }
+
+            if (!map) return;
+            const config = TILE_PROVIDERS[mode] || TILE_PROVIDERS.dark;
+            if (currentTileLayer) {
+                map.removeLayer(currentTileLayer);
+            }
+            currentTileLayer = L.tileLayer(config.url, config.options).addTo(map);
+            currentTileLayer.bringToBack();
+        }
+
+        const BEAT_LOCATIONS = {
+    "BEAT_CEN_01": {
+        "lat": 12.9756,
+        "lon": 77.6066,
+        "name": "Cubbon Park & Vidhana Soudha Perimeter",
+        "station": "Cubbon Park Police Station",
+        "checkpoint": "Anil Kumble Circle Post [12.9752, 77.6059]"
+    },
+    "BEAT_CEN_02": {
+        "lat": 12.9698,
+        "lon": 77.6105,
+        "name": "Ashok Nagar & Brigade Commercial District",
+        "station": "Ashok Nagar Police Station",
+        "checkpoint": "Garuda Mall Outpost [12.9702, 77.6098]"
+    },
+    "BEAT_CEN_03": {
+        "lat": 12.9882,
+        "lon": 77.5855,
+        "name": "High Grounds & Palace Corridor",
+        "station": "High Grounds Police Station",
+        "checkpoint": "Windsor Manor Junction Post [12.9888, 77.5862]"
+    },
+    "BEAT_CEN_04": {
+        "lat": 12.9685,
+        "lon": 77.588,
+        "name": "Ulsoor Gate & City Market Transit Corridor",
+        "station": "Ulsoor Gate Police Station",
+        "checkpoint": "Hudson Circle Police Chowki [12.969, 77.5875]"
+    },
+    "BEAT_CEN_05": {
+        "lat": 12.9465,
+        "lon": 77.596,
+        "name": "Wilson Garden & Shanthinagar Hub",
+        "station": "Wilson Garden Police Station",
+        "checkpoint": "Hosur Road Toll Outpost [12.947, 77.5955]"
+    },
+    "BEAT_CEN_06": {
+        "lat": 12.9796,
+        "lon": 77.5907,
+        "name": "Vidhana Soudha Secretariat Security Zone",
+        "station": "Vidhana Soudha Police Station",
+        "checkpoint": "High Court North Gate Post [12.98, 77.5912]"
+    },
+    "BEAT_EAS_01": {
+        "lat": 12.9784,
+        "lon": 77.6408,
+        "name": "Indiranagar Commercial Corridor",
+        "station": "Indiranagar Police Station",
+        "checkpoint": "CMH Road Main Post [12.979, 77.6415]"
+    },
+    "BEAT_EAS_02": {
+        "lat": 12.9765,
+        "lon": 77.6265,
+        "name": "Halasuru & Cambridge Layout Sector",
+        "station": "Halasuru Police Station",
+        "checkpoint": "Ulsoor Lake Promenade Chowki [12.9772, 77.627]"
+    },
+    "BEAT_EAS_03": {
+        "lat": 12.9856,
+        "lon": 77.6033,
+        "name": "Shivajinagar Commercial & Transit Hub",
+        "station": "Shivajinagar Police Station",
+        "checkpoint": "Russell Market Chowk [12.9862, 77.604]"
+    },
+    "BEAT_EAS_04": {
+        "lat": 12.9822,
+        "lon": 77.6085,
+        "name": "Commercial Street Retail Ward",
+        "station": "Commercial Street Police Station",
+        "checkpoint": "Dispensary Road Intercept [12.9828, 77.609]"
+    },
+    "BEAT_EAS_05": {
+        "lat": 13.0142,
+        "lon": 77.6515,
+        "name": "Banaswadi & HRBR Urban Sector",
+        "station": "Banaswadi Police Station",
+        "checkpoint": "Kammanahalli Main Signal Post [13.0148, 77.652]"
+    },
+    "BEAT_EAS_06": {
+        "lat": 12.9912,
+        "lon": 77.611,
+        "name": "Bharathinagar & Coles Park Ward",
+        "station": "Bharathinagar Police Station",
+        "checkpoint": "Coles Park West Gate Post [12.9918, 77.6115]"
+    },
+    "BEAT_EAS_07": {
+        "lat": 12.9975,
+        "lon": 77.616,
+        "name": "Pulakeshinagar & Frazer Town Cantonment",
+        "station": "Pulakeshinagar Police Station",
+        "checkpoint": "Mosque Road Chowk [12.9982, 77.6165]"
+    },
+    "BEAT_EAS_08": {
+        "lat": 13.018,
+        "lon": 77.622,
+        "name": "KG Halli & Nagawara Perimeter",
+        "station": "KG Halli Police Station",
+        "checkpoint": "Nagawara Junction Post [13.0185, 77.6225]"
+    },
+    "BEAT_EAS_09": {
+        "lat": 13.0075,
+        "lon": 77.6185,
+        "name": "DJ Halli & Tannery Commercial Zone",
+        "station": "DJ Halli Police Station",
+        "checkpoint": "Tannery Road Crossing Outpost [13.008, 77.619]"
+    },
+    "BEAT_EAS_10": {
+        "lat": 13.0165,
+        "lon": 77.678,
+        "name": "Ramamurthy Nagar & TC Palya Sector",
+        "station": "Ramamurthy Nagar Police Station",
+        "checkpoint": "Kalkere Main Road Post [13.017, 77.6785]"
+    },
+    "BEAT_SOU_01": {
+        "lat": 12.9299,
+        "lon": 77.5826,
+        "name": "Jayanagar 4th Block Cultural & Market Ward",
+        "station": "Jayanagar Police Station",
+        "checkpoint": "4th Block Complex Chowki [12.9305, 77.583]"
+    },
+    "BEAT_SOU_02": {
+        "lat": 12.9422,
+        "lon": 77.5738,
+        "name": "Basavanagudi & Gandhi Bazaar Heritage Ward",
+        "station": "Basavanagudi Police Station",
+        "checkpoint": "Gandhi Bazaar Circle Post [12.9428, 77.5742]"
+    },
+    "BEAT_SOU_03": {
+        "lat": 12.908,
+        "lon": 77.5875,
+        "name": "JP Nagar Sarakki & 24th Main Corridor",
+        "station": "JP Nagar Police Station",
+        "checkpoint": "Sarakki Signal Intercept [12.9085, 77.588]"
+    },
+    "BEAT_SOU_04": {
+        "lat": 12.9255,
+        "lon": 77.5468,
+        "name": "Banashankari 2nd Stage & BDA Radial",
+        "station": "Banashankari Police Station",
+        "checkpoint": "Banashankari BDA Complex Chowki [12.926, 77.5472]"
+    },
+    "BEAT_SOU_05": {
+        "lat": 12.9415,
+        "lon": 77.5385,
+        "name": "Girinagar & Avalahalli Urban Ward",
+        "station": "Girinagar Police Station",
+        "checkpoint": "Girinagar Circle Outpost [12.942, 77.539]"
+    },
+    "BEAT_SOU_06": {
+        "lat": 12.9485,
+        "lon": 77.5615,
+        "name": "Hanumanthanagar & Mount Joy Ward",
+        "station": "Hanumanthanagar Police Station",
+        "checkpoint": "Mount Joy Road Signal Post [12.949, 77.562]"
+    },
+    "BEAT_SOU_07": {
+        "lat": 12.8985,
+        "lon": 77.534,
+        "name": "Subramanyapura & Uttarahalli Corridor",
+        "station": "Subramanyapura Police Station",
+        "checkpoint": "Uttarahalli Main Circle Chowki [12.899, 77.5345]"
+    },
+    "BEAT_SOU_08": {
+        "lat": 12.9065,
+        "lon": 77.562,
+        "name": "Kumaraswamy Layout & ISRO Hub",
+        "station": "Kumaraswamy Layout Police Station",
+        "checkpoint": "Dayananda Sagar Campus Gate Post [12.907, 77.5625]"
+    },
+    "BEAT_SOU_09": {
+        "lat": 12.9265,
+        "lon": 77.5985,
+        "name": "Tilak Nagar & 9th Block Urban Sector",
+        "station": "Tilak Nagar Police Station",
+        "checkpoint": "Bannerghatta Road Crossing Post [12.927, 77.599]"
+    },
+    "BEAT_SOU_10": {
+        "lat": 12.9395,
+        "lon": 77.589,
+        "name": "Siddapura & Lalbagh Southern Ward",
+        "station": "Siddapura Police Station",
+        "checkpoint": "Lalbagh Siddapura Gate Chowki [12.94, 77.5895]"
+    },
+    "BEAT_SED_01": {
+        "lat": 12.9352,
+        "lon": 77.6245,
+        "name": "Koramangala 5th Block Nightlife Zone",
+        "station": "Koramangala Police Station",
+        "checkpoint": "Sony World Signal Outpost [12.9348, 77.6238]"
+    },
+    "BEAT_SED_02": {
+        "lat": 12.9225,
+        "lon": 77.6205,
+        "name": "Madiwala Market & St Johns Intercept",
+        "station": "Madiwala Police Station",
+        "checkpoint": "Madiwala Traffic Police Post [12.923, 77.621]"
+    },
+    "BEAT_SED_03": {
+        "lat": 12.9115,
+        "lon": 77.644,
+        "name": "HSR Layout 27th Main High-Street",
+        "station": "HSR Layout Police Station",
+        "checkpoint": "27th Main Commercial Post [12.912, 77.6445]"
+    },
+    "BEAT_SED_04": {
+        "lat": 12.8452,
+        "lon": 77.6602,
+        "name": "Electronic City Phase 1 Tech Corridor",
+        "station": "Electronic City Police Station",
+        "checkpoint": "Toll Gate Elevated Highway Outpost [12.8458, 77.6608]"
+    },
+    "BEAT_SED_05": {
+        "lat": 12.9025,
+        "lon": 77.624,
+        "name": "Bommanahalli & Garvebhavipalya Ward",
+        "station": "Bommanahalli Police Station",
+        "checkpoint": "Bommanahalli Junction Chowki [12.903, 77.6245]"
+    },
+    "BEAT_SED_06": {
+        "lat": 12.8785,
+        "lon": 77.6185,
+        "name": "Begur & Akshayanagar Urban Ward",
+        "station": "Begur Police Station",
+        "checkpoint": "Begur Fort Chowk Post [12.879, 77.619]"
+    },
+    "BEAT_SED_07": {
+        "lat": 12.8815,
+        "lon": 77.596,
+        "name": "Hulimavu & Meenakshi Mall Sector",
+        "station": "Hulimavu Police Station",
+        "checkpoint": "Meenakshi Temple Signal Post [12.882, 77.5965]"
+    },
+    "BEAT_SED_08": {
+        "lat": 12.8875,
+        "lon": 77.652,
+        "name": "Parappana Agrahara & Kudlu Gate Sector",
+        "station": "Parappana Agrahara Police Station",
+        "checkpoint": "Central Prison Gate 1 Outpost [12.888, 77.6525]"
+    },
+    "BEAT_SED_09": {
+        "lat": 12.9165,
+        "lon": 77.6105,
+        "name": "Mico Layout & BTM 2nd Stage Ward",
+        "station": "Mico Layout Police Station",
+        "checkpoint": "Udupi Garden Signal Post [12.917, 77.611]"
+    },
+    "BEAT_WES_01": {
+        "lat": 12.9985,
+        "lon": 77.571,
+        "name": "Malleshwaram & Margosa Commercial Ward",
+        "station": "Malleshwaram Police Station",
+        "checkpoint": "8th Cross Market Chowki [12.999, 77.5715]"
+    },
+    "BEAT_WES_02": {
+        "lat": 12.9895,
+        "lon": 77.5535,
+        "name": "Rajajinagar 1st Block & Navrang Hub",
+        "station": "Rajajinagar Police Station",
+        "checkpoint": "Navrang Circle Outpost [12.99, 77.554]"
+    },
+    "BEAT_WES_03": {
+        "lat": 12.9695,
+        "lon": 77.5345,
+        "name": "Vijayanagar & Chord Road Corridor",
+        "station": "Vijayanagar Police Station",
+        "checkpoint": "Vijayanagar TTMC Chowki [12.97, 77.535]"
+    },
+    "BEAT_WES_04": {
+        "lat": 12.9865,
+        "lon": 77.539,
+        "name": "Basaveshwaranagar & Shankar Mutt Ward",
+        "station": "Basaveshwaranagar Police Station",
+        "checkpoint": "Shankar Mutt Circle Post [12.987, 77.5395]"
+    },
+    "BEAT_WES_05": {
+        "lat": 12.9825,
+        "lon": 77.5185,
+        "name": "Kamakshipalya & Magadi Arterial Ward",
+        "station": "Kamakshipalya Police Station",
+        "checkpoint": "Sumanahalli Junction Post [12.983, 77.519]"
+    },
+    "BEAT_WES_06": {
+        "lat": 12.9565,
+        "lon": 77.5255,
+        "name": "Chandra Layout & Nagarbhavi 1st Stage",
+        "station": "Chandra Layout Police Station",
+        "checkpoint": "80ft Road Chandra Layout Post [12.957, 77.526]"
+    },
+    "BEAT_WES_07": {
+        "lat": 12.9125,
+        "lon": 77.482,
+        "name": "Kengeri & Mysore Road Satellite Ward",
+        "station": "Kengeri Police Station",
+        "checkpoint": "Kengeri Satellite Bus Stand Chowki [12.913, 77.4825]"
+    },
+    "BEAT_WES_08": {
+        "lat": 12.954,
+        "lon": 77.545,
+        "name": "Byatarayanapura West & Mysore Road Corridor",
+        "station": "Byatarayanapura Police Station",
+        "checkpoint": "Mysore Road Tollgate Post [12.9545, 77.5455]"
+    },
+    "BEAT_WES_09": {
+        "lat": 12.9745,
+        "lon": 77.549,
+        "name": "Magadi Road & Leprosy Hospital Ward",
+        "station": "Magadi Road Police Station",
+        "checkpoint": "Magadi Road Toll Gate Post [12.975, 77.5495]"
+    },
+    "BEAT_WES_10": {
+        "lat": 13.0115,
+        "lon": 77.554,
+        "name": "Subramanyanagar & Orion Gateway Sector",
+        "station": "Subramanyanagar Police Station",
+        "checkpoint": "Orion Mall Gateway Post [13.012, 77.5545]"
+    },
+    "BEAT_NOR_01": {
+        "lat": 13.0235,
+        "lon": 77.549,
+        "name": "Yeshwanthpur Transit & APMC Market Hub",
+        "station": "Yeshwanthpur Police Station",
+        "checkpoint": "Yeshwanthpur Junction Post [13.024, 77.5495]"
+    },
+    "BEAT_NOR_02": {
+        "lat": 13.0215,
+        "lon": 77.594,
+        "name": "R.T. Nagar & Dinnur Commercial Corridor",
+        "station": "R.T. Nagar Police Station",
+        "checkpoint": "R.T. Nagar 80ft Road Post [13.022, 77.5945]"
+    },
+    "BEAT_NOR_03": {
+        "lat": 13.0385,
+        "lon": 77.591,
+        "name": "Hebbal & Bellary Road Express Flyover Hub",
+        "station": "Hebbal Police Station",
+        "checkpoint": "Hebbal Flyover Junction Post [13.039, 77.5915]"
+    },
+    "BEAT_NOR_04": {
+        "lat": 13.0335,
+        "lon": 77.5725,
+        "name": "Sanjaynagar & New BEL High-Street",
+        "station": "Sanjaynagar Police Station",
+        "checkpoint": "New BEL Road Signal Post [13.034, 77.573]"
+    },
+    "BEAT_NOR_05": {
+        "lat": 13.0035,
+        "lon": 77.595,
+        "name": "J.C. Nagar & Jayamahal Urban Sector",
+        "station": "J.C. Nagar Police Station",
+        "checkpoint": "TV Tower Perimeter Post [13.004, 77.5955]"
+    },
+    "BEAT_NOR_06": {
+        "lat": 13.0325,
+        "lon": 77.518,
+        "name": "Peenya Industrial Mega-Zone",
+        "station": "Peenya Police Station",
+        "checkpoint": "Peenya 1st Stage Chowki [13.033, 77.5185]"
+    },
+    "BEAT_NOR_07": {
+        "lat": 13.0125,
+        "lon": 77.531,
+        "name": "Nandini Layout & Kanteerava Studio Sector",
+        "station": "Nandini Layout Police Station",
+        "checkpoint": "Nandini Cinema Signal Post [13.013, 77.5315]"
+    },
+    "BEAT_NOR_08": {
+        "lat": 13.009,
+        "lon": 77.5475,
+        "name": "Mahalakshmi Layout & ISKCON Temple Radial",
+        "station": "Mahalakshmi Layout Police Station",
+        "checkpoint": "ISKCON Temple Entrance Post [13.0095, 77.548]"
+    },
+    "BEAT_NOR_09": {
+        "lat": 13.056,
+        "lon": 77.544,
+        "name": "Gangammanagudi & Jalahalli East Ward",
+        "station": "Gangammanagudi Police Station",
+        "checkpoint": "Air Force Station Outpost [13.0565, 77.5445]"
+    },
+    "BEAT_NOR_10": {
+        "lat": 13.0425,
+        "lon": 77.5485,
+        "name": "Jalahalli & BEL Manufacturing Campus",
+        "station": "Jalahalli Police Station",
+        "checkpoint": "BEL Circle Traffic Post [13.043, 77.549]"
+    },
+    "BEAT_NED_01": {
+        "lat": 13.101,
+        "lon": 77.596,
+        "name": "Yelahanka Old Town & Kogilu Hub",
+        "station": "Yelahanka Police Station",
+        "checkpoint": "Kogilu Cross Junction Post [13.1015, 77.5965]"
+    },
+    "BEAT_NED_02": {
+        "lat": 13.1185,
+        "lon": 77.579,
+        "name": "Yelahanka New Town & Rail Wheel Sector",
+        "station": "Yelahanka New Town Police Station",
+        "checkpoint": "Major Unnikrishnan Road Post [13.119, 77.5795]"
+    },
+    "BEAT_NED_03": {
+        "lat": 13.061,
+        "lon": 77.5905,
+        "name": "Kodigehalli & Sahakarnagar Corridor",
+        "station": "Kodigehalli Police Station",
+        "checkpoint": "Sahakarnagar Main Road Post [13.0615, 77.591]"
+    },
+    "BEAT_NED_04": {
+        "lat": 13.0785,
+        "lon": 77.5605,
+        "name": "Vidyaranyapura & HMT Layout Sector",
+        "station": "Vidyaranyapura Police Station",
+        "checkpoint": "Vidyaranyapura Bus Depot Chowki [13.079, 77.561]"
+    },
+    "BEAT_NED_05": {
+        "lat": 13.1365,
+        "lon": 77.669,
+        "name": "Bagalur & Aerospace Tech Park Ward",
+        "station": "Bagalur Police Station",
+        "checkpoint": "Aerospace SEZ Entry Post [13.137, 77.6695]"
+    },
+    "BEAT_NED_06": {
+        "lat": 13.1675,
+        "lon": 77.625,
+        "name": "Chikkajala & Airport Highway Toll Corridor",
+        "station": "Chikkajala Police Station",
+        "checkpoint": "NH 44 Airport Highway Post [13.168, 77.6255]"
+    },
+    "BEAT_NED_07": {
+        "lat": 13.245,
+        "lon": 77.712,
+        "name": "Devanahalli & BIAL Tech Sector",
+        "station": "Devanahalli Police Station",
+        "checkpoint": "Devanahalli Fort Junction Post [13.2455, 77.7125]"
+    },
+    "BEAT_NED_08": {
+        "lat": 13.1989,
+        "lon": 77.7068,
+        "name": "Kempegowda International Airport (BIAL)",
+        "station": "BIAL Airport Police Station",
+        "checkpoint": "Terminal 1 Arrivals Forecourt Post [13.1995, 77.7072]"
+    },
+    "BEAT_NED_09": {
+        "lat": 13.0645,
+        "lon": 77.6045,
+        "name": "Amruthahalli & Jakkur Aerodrome Sector",
+        "station": "Amruthahalli Police Station",
+        "checkpoint": "Jakkur Flying School Post [13.065, 77.605]"
+    },
+    "BEAT_WHI_01": {
+        "lat": 12.9698,
+        "lon": 77.7499,
+        "name": "Whitefield Tech Corridor & ITPL Hub",
+        "station": "Whitefield Police Station",
+        "checkpoint": "ITPL Main Gate Outpost [12.9705, 77.7505]"
+    },
+    "BEAT_WHI_02": {
+        "lat": 12.9555,
+        "lon": 77.671,
+        "name": "HAL & Old Airport Arterial Ward",
+        "station": "HAL Police Station",
+        "checkpoint": "HAL Heritage Centre Post [12.956, 77.6715]"
+    },
+    "BEAT_WHI_03": {
+        "lat": 12.956,
+        "lon": 77.701,
+        "name": "Marathahalli & Multiplex Commercial Hub",
+        "station": "Marathahalli Police Station",
+        "checkpoint": "Marathahalli Bridge Traffic Post [12.9565, 77.7015]"
+    },
+    "BEAT_WHI_04": {
+        "lat": 12.9915,
+        "lon": 77.6875,
+        "name": "Mahadevapura & Bagmane Tech Corridor",
+        "station": "Mahadevapura Police Station",
+        "checkpoint": "Phoenix Marketcity Signal Post [12.992, 77.688]"
+    },
+    "BEAT_WHI_05": {
+        "lat": 13.0075,
+        "lon": 77.696,
+        "name": "K.R. Puram & Hanging Bridge Transit Sector",
+        "station": "K.R. Puram Police Station",
+        "checkpoint": "KR Puram Hanging Bridge Post [13.008, 77.6965]"
+    },
+    "BEAT_WHI_06": {
+        "lat": 12.9985,
+        "lon": 77.761,
+        "name": "Kadugodi & Belathur Residential Ward",
+        "station": "Kadugodi Police Station",
+        "checkpoint": "Kadugodi Tree Park Post [12.999, 77.7615]"
+    },
+    "BEAT_WHI_07": {
+        "lat": 12.9395,
+        "lon": 77.741,
+        "name": "Varthur & Gunjur Lake Agro-Urban Ward",
+        "station": "Varthur Police Station",
+        "checkpoint": "Varthur Kodi Circle Post [12.94, 77.7415]"
+    },
+    "BEAT_WHI_08": {
+        "lat": 12.926,
+        "lon": 77.6765,
+        "name": "Bellandur & EcoSpace Tech Ecosystem",
+        "station": "Bellandur Police Station",
+        "checkpoint": "EcoSpace Outer Ring Road Post [12.9265, 77.677]"
+    },
+    "BEAT_WHI_09": {
+        "lat": 13.0315,
+        "lon": 77.728,
+        "name": "Avalahalli (East) & Bidarahalli Ward",
+        "station": "Avalahalli Police Station",
+        "checkpoint": "Medahalli Highway Signal Post [13.032, 77.7285]"
+    },
+    "BEAT_101": {
+        "lat": 12.9784,
+        "lon": 77.6408,
+        "name": "Indiranagar Commercial Corridor",
+        "station": "Indiranagar Police Station",
+        "checkpoint": "CMH Road Main Post [12.979, 77.6415]"
+    },
+    "BEAT_102": {
+        "lat": 12.9352,
+        "lon": 77.6245,
+        "name": "Koramangala 5th Block Nightlife Zone",
+        "station": "Koramangala Police Station",
+        "checkpoint": "Sony World Signal Outpost [12.9348, 77.6238]"
+    },
+    "BEAT_103": {
+        "lat": 12.9756,
+        "lon": 77.6066,
+        "name": "Cubbon Park & Vidhana Soudha Perimeter",
+        "station": "Cubbon Park Police Station",
+        "checkpoint": "Anil Kumble Circle Post [12.9752, 77.6059]"
+    },
+    "BEAT_104": {
+        "lat": 12.9698,
+        "lon": 77.7499,
+        "name": "Whitefield Tech Corridor & ITPL Hub",
+        "station": "Whitefield Police Station",
+        "checkpoint": "ITPL Main Gate Outpost [12.9705, 77.7505]"
+    },
+    "BEAT_105": {
+        "lat": 12.9856,
+        "lon": 77.6033,
+        "name": "Shivajinagar Commercial & Transit Hub",
+        "station": "Shivajinagar Police Station",
+        "checkpoint": "Russell Market Chowk [12.9862, 77.604]"
+    },
+    "BEAT_106": {
+        "lat": 12.9299,
+        "lon": 77.5826,
+        "name": "Jayanagar 4th Block Cultural & Market Ward",
+        "station": "Jayanagar Police Station",
+        "checkpoint": "4th Block Complex Chowki [12.9305, 77.583]"
+    }
+};
+
+        function initMap() {
+            if (map) return;
+            map = L.map('patrol-map', {
+                zoomControl: true,
+                scrollWheelZoom: true
+            }).setView([12.9784, 77.6408], 14);
+
+            switchTileLayer('dark');
+
+            markersGroup = L.featureGroup().addTo(map);
+        }
+
+        async function fetchPatrolRoute() {
+            const beatId = document.getElementById('beat-selector').value;
+            const shiftWindow = document.getElementById('shift-selector').value;
+            const numWaypoints = parseInt(document.getElementById('k-slider').value) || 5;
+
+            const submitBtn = document.getElementById('btn-submit');
+            const mapStatus = document.getElementById('map-status');
+            const container = document.getElementById('waypoints-container');
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Computing Waypoints...';
+            mapStatus.className = 'badge bg-warning text-dark';
+            mapStatus.innerText = 'Calculating TSP Path...';
+
+            // Update beat meta text
+            if (BEAT_LOCATIONS[beatId]) {
+                document.getElementById('meta-station').innerText = BEAT_LOCATIONS[beatId].station;
+                document.getElementById('meta-checkpoint').innerText = BEAT_LOCATIONS[beatId].checkpoint;
+            }
+
+            try {
+                const response = await fetch('/api/patrol-route', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        beat_id: beatId,
+                        shift_window: shiftWindow,
+                        num_waypoints: numWaypoints
+                    })
+                });
+
+                const data = await response.json();
+                if (data.status === 'success' && data.waypoints) {
+                    currentWaypoints = data.waypoints;
+                    renderRouteOnMap(data.waypoints, beatId, shiftWindow);
+                    renderWaypointsList(data.waypoints);
+                    updateTelemetryStats(data.waypoints);
+                    mapStatus.className = 'badge bg-success';
+                    mapStatus.innerText = 'Optimized Circuit Active';
+                } else {
+                    container.innerHTML = `
+                        <div class="alert alert-danger" style="font-size:0.85rem;">
+                            <i class="fas fa-triangle-exclamation mr-1"></i> ${data.message || 'Error generating route.'}
+                        </div>`;
+                    mapStatus.className = 'badge bg-danger';
+                    mapStatus.innerText = 'Computation Error';
+                }
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="alert alert-danger" style="font-size:0.85rem;">
+                        <i class="fas fa-circle-xmark mr-1"></i> Failed to communicate with dispatch engine: ${err.message}
+                    </div>`;
+                mapStatus.className = 'badge bg-danger';
+                mapStatus.innerText = 'Offline';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-compass-drafting mr-2"></i> Compute Tactical Patrol Path';
+            }
+        }
+
+        function renderRouteOnMap(waypoints, beatId, shiftWindow) {
+            initMap();
+            markersGroup.clearLayers();
+            if (routePolyline) {
+                map.removeLayer(routePolyline);
+            }
+
+            const latlngs = [];
+
+            // Add Base Outpost Marker
+            const beatMeta = BEAT_LOCATIONS[beatId];
+            if (beatMeta) {
+                const baseLat = beatMeta.lat;
+                const baseLon = beatMeta.lon;
+                latlngs.push([baseLat, baseLon]);
+
+                const baseIcon = L.divIcon({
+                    className: 'custom-marker marker-base',
+                    html: '<i class="fas fa-shield" style="font-size:12px;"></i>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                });
+
+                L.marker([baseLat, baseLon], { icon: baseIcon })
+                    .bindPopup(`
+                        <div style="font-size:0.82rem;line-height:1.4;">
+                            <div style="font-weight:700;color:#0284c7;font-family:monospace;">PATROL BASE CHECKPOINT</div>
+                            <div><strong>${beatMeta.station}</strong></div>
+                            <div style="color:#64748b;font-size:0.75rem;">${beatMeta.checkpoint}</div>
+                        </div>
+                    `)
+                    .addTo(markersGroup);
+            }
+
+            // Add Waypoint Centroid Markers
+            waypoints.forEach((wp, idx) => {
+                const lat = wp.latitude;
+                const lon = wp.longitude;
+                latlngs.push([lat, lon]);
+
+                const riskClass = wp.risk_level === 'Red' ? 'marker-red' : (wp.risk_level === 'Orange' ? 'marker-orange' : 'marker-green');
+                const order = wp.waypoint_order || (idx + 1);
+
+                const icon = L.divIcon({
+                    className: `custom-marker ${riskClass}`,
+                    html: `<span>${order}</span>`,
+                    iconSize: [26, 26],
+                    iconAnchor: [13, 13]
+                });
+
+                const marker = L.marker([lat, lon], { icon: icon });
+                marker.bindPopup(`
+                    <div style="font-size:0.82rem;line-height:1.45;min-width:210px;">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span style="font-family:monospace;font-weight:700;color:#38bdf8;">${wp.waypoint_id}</span>
+                            <span class="badge ${wp.risk_level === 'Red' ? 'bg-danger' : (wp.risk_level === 'Orange' ? 'bg-warning text-dark' : 'bg-success')}" style="font-size:0.65rem;">
+                                ${wp.risk_level.toUpperCase()} ZONE
+                            </span>
+                        </div>
+                        <div style="font-weight:700;margin-bottom:2px;">${wp.landmark || 'Incident Cluster'}</div>
+                        <div style="font-size:0.75rem;color:#94a3b8;"><i class="fas fa-clock mr-1"></i> Slot: ${wp.recommended_time_slot}</div>
+                        <div style="font-size:0.75rem;color:#94a3b8;"><i class="fas fa-stopwatch mr-1"></i> Stop: ${wp.recommended_stop_minutes} mins</div>
+                        <div style="margin-top:5px;font-size:0.74rem;background:#1e293b;padding:4px 6px;border-radius:4px;">
+                            ${wp.tactical_instruction}
+                        </div>
+                    </div>
+                `);
+
+                markersGroup.addLayer(marker);
+            });
+
+            // Draw Sequential Connecting Polyline
+            routePolyline = L.polyline(latlngs, {
+                color: '#38bdf8',
+                weight: 3.5,
+                opacity: 0.85,
+                dashArray: '8, 6',
+                lineJoin: 'round'
+            }).addTo(map);
+
+            if (latlngs.length > 0) {
+                map.fitBounds(markersGroup.getBounds().pad(0.18));
+            }
+        }
+
+        function renderWaypointsList(waypoints) {
+            const container = document.getElementById('waypoints-container');
+            if (!waypoints || waypoints.length === 0) {
+                container.innerHTML = `<div class="text-muted text-center py-4">No checkpoints generated.</div>`;
+                return;
+            }
+
+            let html = '';
+            waypoints.forEach((wp, idx) => {
+                const riskKey = wp.risk_level.toLowerCase();
+                const badgeClass = `badge-${riskKey}`;
+                const cardClass = `risk-${riskKey}`;
+
+                html += `
+                    <div class="waypoint-card ${cardClass}" onclick="focusWaypoint(${wp.latitude}, ${wp.longitude})">
+                        <div class="d-flex align-items-center justify-content-between mb-1">
+                            <div class="d-flex align-items-center">
+                                <span class="waypoint-order-badge ${badgeClass}">${wp.waypoint_order}</span>
+                                <span style="font-family:var(--font-mono);font-size:0.85rem;font-weight:700;color:#f8fafc;">
+                                    ${wp.waypoint_id}
+                                </span>
+                            </div>
+                            <span class="hud-badge hud-badge-${riskKey}">
+                                ${wp.risk_level} Risk
+                            </span>
+                        </div>
+
+                        <div class="d-flex align-items-center justify-content-between mb-1" style="font-size:0.78rem;">
+                            <span style="color:#e2e8f0;font-weight:600;"><i class="fas fa-location-crosshairs mr-1 text-cyan"></i> ${wp.landmark}</span>
+                            <span style="font-family:var(--font-mono);color:#94a3b8;"><i class="fas fa-clock mr-1"></i> ${wp.recommended_time_slot}</span>
+                        </div>
+
+                        <div style="font-size:0.75rem;color:#94a3b8;margin-bottom:0.4rem;">
+                            <span class="mr-2"><i class="fas fa-route mr-1"></i> +${wp.distance_from_prev_km} km</span>
+                            <span><i class="fas fa-hourglass-half mr-1"></i> ${wp.recommended_stop_minutes}m station watch</span>
+                        </div>
+
+                        <div style="font-size:0.75rem;color:#cbd5e1;background:rgba(15,23,42,0.6);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);">
+                            <i class="fas fa-shield-virus mr-1 text-info"></i> ${wp.tactical_instruction}
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function updateTelemetryStats(waypoints) {
+            let red = 0, orange = 0, green = 0;
+            let totalDist = 0;
+            let totalStopMinutes = 0;
+
+            waypoints.forEach(w => {
+                if (w.risk_level === 'Red') red++;
+                else if (w.risk_level === 'Orange') orange++;
+                else green++;
+
+                totalDist += (w.distance_from_prev_km || 0);
+                totalStopMinutes += (w.recommended_stop_minutes || 20);
+            });
+
+            document.getElementById('stat-total-wp').innerText = waypoints.length;
+            document.getElementById('stat-red-count').innerText = red;
+            document.getElementById('stat-orange-count').innerText = orange;
+            document.getElementById('stat-green-count').innerText = green;
+            document.getElementById('stat-circuit-dist').innerText = totalDist.toFixed(1) + ' km';
+            document.getElementById('stat-circuit-time').innerText = (totalStopMinutes + 25) + ' mins';
+
+            const shift = document.getElementById('shift-selector').value;
+            document.getElementById('route-shift-label').innerText = shift.toUpperCase() + ' SHIFT';
+        }
+
+        function focusWaypoint(lat, lon) {
+            if (map) {
+                map.setView([lat, lon], 16, { animate: true, duration: 0.8 });
+            }
+        }
+
+        function copyManifestJSON() {
+            if (!currentWaypoints || currentWaypoints.length === 0) {
+                alert('No active patrol route generated to copy.');
+                return;
+            }
+            navigator.clipboard.writeText(JSON.stringify(currentWaypoints, null, 2))
+                .then(() => alert('Tactical Waypoint Manifest copied to clipboard!'))
+                .catch(err => alert('Failed to copy: ' + err));
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            fetchPatrolRoute();
+        });
+    </script>
+
+    <!-- Theme Switcher script -->
+    <script src="{{url_for('static',filename='javascript/theme.js')}}"></script>
+</body>
+</html>

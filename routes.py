@@ -965,6 +965,20 @@ def foliummap():
 
 
 # ===========================================================================
+# Proactive Patrol Waypoint Generation & Dispatch HUD (field_officer only)
+# ===========================================================================
+
+@app.route('/patrol')
+@app.route('/patrol-route')
+@app.route('/patrol-hud')
+@login_required
+@role_required('field_officer')
+def patrol_hud():
+    """Render the Proactive Patrol Waypoint Generation & Dispatch HUD."""
+    return render_template('patrol_route.html')
+
+
+# ===========================================================================
 # Case File Intelligence Analyzer (field_officer only)
 # ===========================================================================
 

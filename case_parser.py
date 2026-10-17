@@ -114,6 +114,111 @@ def normalize_kanglish_text(text: str) -> str:
     return normalized
 
 
+def extract_narrative_paragraphs(text: str) -> List[str]:
+    """
+    Extracts clean, coherent paragraph blocks from the FIR narrative.
+    Preserves natural section breaks, indented statements, and multi-line structures.
+
+    Parameters
+    ----------
+    text : str
+        Raw or cleaned FIR narrative text.
+
+    Returns
+    -------
+    List[str]
+        List of formatted paragraph strings.
+    """
+    if not text or not text.strip():
+        return []
+
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n').strip()
+    raw_paras = re.split(r'\n\s*\n+', normalized)
+    paragraphs = []
+
+    for p in raw_paras:
+        clean_p = p.strip()
+        if clean_p:
+            paragraphs.append(clean_p)
+
+    if not paragraphs:
+        paragraphs = [normalized]
+
+    return paragraphs
+
+
+def extract_narrative_statements(text: str) -> List[Dict[str, Any]]:
+    """
+    Splits narrative into sequential, clean statement lines for structured line-by-line display.
+    Handles both multi-line FIRs and dense single-paragraph FIR narratives intelligently
+    while protecting abbreviations, sections, currency, and numerical entities.
+
+    Parameters
+    ----------
+    text : str
+        Raw or cleaned FIR narrative text.
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        List of statement objects containing 'index' (1-based int) and 'text' (clean str).
+    """
+    if not text or not text.strip():
+        return []
+
+    raw_blocks = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    statements = []
+
+    protected_tokens = [
+        'No.', 'Sec.', 'Secs.', 'Rs.', 'Dr.', 'Mr.', 'Mrs.', 'Ms.', 'Shri.',
+        'approx.', 'viz.', 'i.e.', 'e.g.', 'vs.', 'Jan.', 'Feb.', 'Mar.',
+        'Apr.', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.',
+        'BNS.', 'IPC.', 'CrPC.', 'a.k.a.', 'ref.', 'FIR No.'
+    ]
+
+    for block in raw_blocks:
+        masked = block
+        placeholders = {}
+        for idx, tok in enumerate(protected_tokens):
+            if tok.lower() in masked.lower():
+                pattern = re.compile(re.escape(tok), re.IGNORECASE)
+                for m in set(pattern.findall(masked)):
+                    key = f"__PROT_TOK_{idx}_{len(placeholders)}__"
+                    placeholders[key] = m
+                    masked = masked.replace(m, key)
+
+        decimal_matches = re.findall(r'\b\d+\.\d+\b', masked)
+        for dm in set(decimal_matches):
+            key = f"__PROT_NUM_{len(placeholders)}__"
+            placeholders[key] = dm
+            masked = masked.replace(dm, key)
+
+        # Split on sentence ending punctuation followed by whitespace and capital/digit/quote
+        parts = re.split(r'([.!?]+)\s+(?=[A-Z0-9"\'\(\[\+])', masked)
+
+        reconstructed = []
+        i = 0
+        while i < len(parts):
+            seg = parts[i]
+            if i + 1 < len(parts) and re.match(r'^[.!?]+$', parts[i+1]):
+                seg = seg + parts[i+1]
+                i += 1
+            if seg.strip():
+                for k, v in placeholders.items():
+                    seg = seg.replace(k, v)
+                reconstructed.append(seg.strip())
+            i += 1
+
+        if reconstructed:
+            statements.extend(reconstructed)
+        else:
+            for k, v in placeholders.items():
+                block = block.replace(k, v)
+            statements.append(block)
+
+    return [{'index': i + 1, 'text': s} for i, s in enumerate(statements)]
+
+
 # ---------------------------------------------------------------------------
 # Weapon catalog
 # ---------------------------------------------------------------------------
@@ -668,7 +773,9 @@ def extract_case_intelligence(narrative_text: str, source_label: str = "Direct N
             "Archive telemetry for retrospective analytical pattern modeling."
         ]
 
-    excerpt = clean_text[:600] + ('...' if len(clean_text) > 600 else '')
+    excerpt = clean_text[:8000] + ('...' if len(clean_text) > 8000 else '')
+    narrative_paragraphs = extract_narrative_paragraphs(clean_text)
+    narrative_statements = extract_narrative_statements(clean_text)
 
     # ------------------------------------------------------------------
     # 9. Return structured dossier
@@ -691,17 +798,22 @@ def extract_case_intelligence(narrative_text: str, source_label: str = "Direct N
             'neu':      round(neu_score, 3),
             'pos':      round(pos_score, 3),
         },
-        'threat_score':    threat_score,
-        'severity_label':  severity_label,
-        'severity_class':  severity_class,
-        'severity_desc':   severity_desc,
-        'action_protocol': action_protocol,
-        'weapons':         extracted_weapons,
-        'locations':       location_list,
-        'timeline':        timeline_signals,
-        'ipc_categories':  detected_ipc,
-        'tactical_signals': tactical_signals,
-        'ner_entities':    ner_entities,
-        'raw_excerpt':     excerpt
+        'threat_score':         threat_score,
+        'severity_label':       severity_label,
+        'severity_class':       severity_class,
+        'severity_desc':        severity_desc,
+        'action_protocol':      action_protocol,
+        'weapons':              extracted_weapons,
+        'locations':            location_list,
+        'timeline':             timeline_signals,
+        'ipc_categories':       detected_ipc,
+        'tactical_signals':     tactical_signals,
+        'ner_entities':         ner_entities,
+        'narrative_paragraphs': narrative_paragraphs,
+        'narrative_statements': narrative_statements,
+        'narrative_lines':      [s['text'] for s in narrative_statements],
+        'raw_excerpt':          excerpt
     }
+
+
 

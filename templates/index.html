@@ -34,6 +34,7 @@
             <li><a href="{{url_for('crimefeed')}}"><i class="fas fa-satellite-dish"></i> Spatial Heatmap HUD</a></li>
             <li><a href="{{url_for('analyze_case')}}"><i class="fas fa-microchip"></i> FIR Threat Assessment HUD</a></li>
             <li><a href="{{url_for('cdr_page')}}"><i class="fas fa-phone-volume"></i> CDR Intelligence</a></li>
+            <li><a href="{{url_for('patrol_hud')}}"><i class="fas fa-route"></i> Patrol Dispatch HUD</a></li>
             <li><a href="{{url_for('datadisp')}}"><i class="fas fa-database"></i> Datasets</a></li>
             {% endif %}
             <li><a href="{{url_for('feedback')}}"><i class="fas fa-comment-dots"></i> Feedback</a></li>
@@ -349,6 +350,31 @@
                         <button type="button" class="button">
                             <span>Examine Records</span>
                             <i class="fas fa-database text-xs ml-2"></i>
+                        </button>
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+
+            {# --- Module 9: Proactive Patrol Dispatch HUD --- #}
+            {% if current_user.is_authenticated and current_user.role == 'field_officer' %}
+            <div class="hud-module-card">
+                <div class="hud-card-content">
+                    <span class="algorithm-badge algorithm-badge-kmeans">
+                        <i class="fas fa-route mr-1"></i> K-Means Centroids + Nearest-Neighbor TSP
+                    </span>
+                    <h2 class="title-font">
+                        <span><i class="fas fa-map-location-dot text-cyan-400 mr-2"></i> Proactive Patrol Dispatch HUD</span>
+                    </h2>
+                    <p class="leading-relaxed">
+                        Algorithmic micro-spatial downscaling, K-Means high-risk centroid clustering, and automated sequential patrol route optimization for beat officers.
+                    </p>
+                </div>
+                <div class="hud-card-actions">
+                    <a href="{{url_for('patrol_hud')}}" style="text-decoration:none;">
+                        <button type="button" class="button">
+                            <span>Launch Patrol Dispatch HUD</span>
+                            <i class="fas fa-compass text-xs ml-2"></i>
                         </button>
                     </a>
                 </div>
